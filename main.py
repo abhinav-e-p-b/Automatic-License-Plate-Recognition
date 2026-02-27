@@ -11,15 +11,17 @@ results = {}
 
 mot_tracker = Sort()
 
-# load models
+# Load models
 coco_model = YOLO('yolov8n.pt')
-license_plate_detector = YOLO('license_plate_detector.pt')
+license_plate_detector = YOLO('best.pt')
 
-# load video
-cap = cv2.VideoCapture('./sample.mp4')  # Fix 1: use cv2.VideoCapture, not model.track()
+# Load video
+cap = cv2.VideoCapture('./input.mp4')
+
+# COCO vehicle class IDs: car=2, motorcycle=3, bus=5, truck=7
 vehicles = [2, 3, 5, 7]
 
-# read frames
+# Read frames
 frame_nmr = -1
 ret = True
 while ret:
@@ -27,7 +29,8 @@ while ret:
     ret, frame = cap.read()
     if ret:
         results[frame_nmr] = {}
-        # detect vehicles
+
+        # Detect vehicles
         detections = coco_model(frame)[0]
         detections_ = []
         for detection in detections.boxes.data.tolist():
@@ -35,35 +38,59 @@ while ret:
             if int(class_id) in vehicles:
                 detections_.append([x1, y1, x2, y2, score])
 
-        # track vehicles
+        # Track vehicles
         track_ids = mot_tracker.update(np.asarray(detections_))
 
-        # detect license plates
+        # Detect license plates
         license_plates = license_plate_detector(frame)[0]
         for license_plate in license_plates.boxes.data.tolist():
             x1, y1, x2, y2, score, class_id = license_plate
 
-            # assign license plate to car
+            # Assign license plate to a tracked car
             xcar1, ycar1, xcar2, ycar2, car_id = get_car(license_plate, track_ids)
 
             if car_id != -1:
+                # Crop license plate
+                license_plate_crop = frame[int(y1):int(y2), int(x1):int(x2), :]
 
-                # crop license plate
-                license_plate_crop = frame[int(y1):int(y2), int(x1): int(x2), :]
+                # --- Preprocessing for Indian plates ---
+                # Resize for better OCR accuracy (PaddleOCR prefers ~32px height)
+                h, w = license_plate_crop.shape[:2]
+                scale = max(1, 32 // max(h, 1))
+                if scale > 1:
+                    license_plate_crop = cv2.resize(
+                        license_plate_crop,
+                        (w * scale, h * scale),
+                        interpolation=cv2.INTER_CUBIC
+                    )
 
-                # process license plate
-                license_plate_crop_gray = cv2.cvtColor(license_plate_crop, cv2.COLOR_BGR2GRAY)
-                _, license_plate_crop_thresh = cv2.threshold(license_plate_crop_gray, 64, 255, cv2.THRESH_BINARY_INV)
+                # Convert to grayscale and apply adaptive threshold
+                gray = cv2.cvtColor(license_plate_crop, cv2.COLOR_BGR2GRAY)
 
-                # read license plate number
-                license_plate_text, license_plate_text_score = read_license_plate(license_plate_crop_thresh)
+                # Adaptive thresholding works better for Indian plates with varied lighting
+                license_plate_crop_thresh = cv2.adaptiveThreshold(
+                    gray, 255,
+                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY,
+                    11, 2
+                )
+
+                # Convert back to 3-channel for PaddleOCR
+                license_plate_crop_processed = cv2.cvtColor(license_plate_crop_thresh, cv2.COLOR_GRAY2BGR)
+
+                # Read license plate number
+                license_plate_text, license_plate_text_score = read_license_plate(license_plate_crop_processed)
 
                 if license_plate_text is not None:
-                    results[frame_nmr][car_id] = {'car': {'bbox': [xcar1, ycar1, xcar2, ycar2]},
-                                                  'license_plate': {'bbox': [x1, y1, x2, y2],
-                                                                    'text': license_plate_text,
-                                                                    'bbox_score': score,
-                                                                    'text_score': license_plate_text_score}}
+                    results[frame_nmr][car_id] = {
+                        'car': {'bbox': [xcar1, ycar1, xcar2, ycar2]},
+                        'license_plate': {
+                            'bbox': [x1, y1, x2, y2],
+                            'text': license_plate_text,
+                            'bbox_score': score,
+                            'text_score': license_plate_text_score
+                        }
+                    }
 
-# write results
+# Write results
 write_csv(results, './test.csv')
