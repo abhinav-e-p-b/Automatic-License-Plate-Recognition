@@ -1,0 +1,24 @@
+pip install -r requirements.txt
+python scripts/01_download_dataset.py   # pulls from Kaggle
+python scripts/02_prepare_dataset.py   # splits 80/10/10, writes labels + YAML
+python scripts/03_train.py             # fine-tunes YOLOv8s, saves models/best.pt
+python scripts/04_evaluate.py --samples  # mAP + prediction grid
+python detect_image.py --source img.jpg --show
+python detect_video.py --source video.mp4 --output outputs/result.mp4 --csv outputs/log.csv
+python detect_webcam.py
+
+python diagnose.py --source your_image.jpg
+python detect_image.py --source your_image.jpg --debug
+
+#bot sort
+
+pip install -r requirements.txt
+
+# Download the ReID weights once (~5MB)
+python -c "from boxmot import download_models; download_models('osnet_x0_25_msmt17.pt')"
+
+# Run with ReID enabled
+python detect_video.py --source video.mp4 --reid osnet_x0_25_msmt17.pt --csv outputs/log.csv
+
+# Or without ReID (Kalman-only, faster on CPU)
+python detect_video.py --source video.mp4 --csv outputs/log.csv
